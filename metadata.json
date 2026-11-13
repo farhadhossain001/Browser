@@ -1,0 +1,6 @@
+{
+  "name": "GhostBrowser - Lightweight Web Browser",
+  "description": "A clean, lightweight web browser with instant search, tab management, zero history tracking, and fast proxy browsing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
