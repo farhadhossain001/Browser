@@ -1,3 +1,3 @@
-import { createVercelRouteApp, handleProxy } from '../server/handlers';
+import { createVercelRouteApp, handleProxy } from './_handlers.js';
 
 export default createVercelRouteApp(handleProxy);

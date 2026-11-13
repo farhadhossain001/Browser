@@ -1,3 +1,3 @@
-import { createVercelRouteApp, handleSuggest } from '../server/handlers';
+import { createVercelRouteApp, handleSuggest } from './_handlers.js';
 
 export default createVercelRouteApp(handleSuggest);

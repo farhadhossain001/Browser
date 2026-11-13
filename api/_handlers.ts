@@ -44,6 +44,36 @@ function escapeHtml(str: string): string {
     .replace(/'/g, '&#39;');
 }
 
+async function pipeWebBodyToResponse(upstream: globalThis.Response, res: Response): Promise<void> {
+  if (!upstream.body) {
+    res.end();
+    return;
+  }
+  try {
+    const nodeStream = Readable.fromWeb(upstream.body as any);
+    await new Promise<void>((resolve, reject) => {
+      nodeStream.on('error', (err) => reject(err));
+      res.on('close', () => {
+        try {
+          nodeStream.destroy();
+        } catch {
+          // ignore
+        }
+        resolve();
+      });
+      res.on('finish', () => resolve());
+      nodeStream.pipe(res);
+    });
+  } catch {
+    if (!res.headersSent) {
+      res.status(502);
+    }
+    if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
 function unwrapRedirectUrl(rawUrl: string): string {
   try {
     const parsed = new URL(rawUrl);
@@ -1091,7 +1121,7 @@ async function renderGoogleFallbackSearch(
   const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
   const ddgRes = await fetch(ddgUrl, {
     headers: getBrowserHeaders('https://html.duckduckgo.com/'),
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(8000),
   });
   const ddgHtml = await ddgRes.text();
   const $ = cheerio.load(ddgHtml);
@@ -1279,7 +1309,7 @@ export async function handleReadability(req: Request, res: Response) {
   try {
     const response = await fetch(targetUrl, {
       headers: getBrowserHeaders(),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
 
     const html = await response.text();
@@ -1334,7 +1364,17 @@ export async function handleAsset(req: Request, res: Response) {
 
   const proxyOrigin = getProxyOrigin(req);
   const controller = new AbortController();
-  req.on('close', () => controller.abort());
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 8500);
+  res.on('close', () => {
+    clearTimeout(timeoutId);
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  });
 
   try {
     const headers: Record<string, string> = {
@@ -1369,6 +1409,7 @@ export async function handleAsset(req: Request, res: Response) {
     }
 
     const upstream = await fetch(rawUrl, fetchInit);
+    clearTimeout(timeoutId);
     const finalAssetUrl = upstream.url || rawUrl;
     const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
 
@@ -1392,16 +1433,15 @@ export async function handleAsset(req: Request, res: Response) {
       return res.end();
     }
 
-    const nodeStream = Readable.fromWeb(upstream.body as any);
-    nodeStream.on('error', () => {
-      if (!res.headersSent) res.status(502);
-      res.end();
-    });
-    return nodeStream.pipe(res);
+    return await pipeWebBodyToResponse(upstream, res);
   } catch (err: any) {
-    if (err?.name === 'AbortError') return;
+    clearTimeout(timeoutId);
+    if (err?.name === 'AbortError' && !timedOut) {
+      if (!res.writableEnded) res.end();
+      return;
+    }
     if (!res.headersSent) {
-      return res.status(502).send('Asset fetch failed');
+      return res.status(timedOut ? 504 : 502).send(timedOut ? 'Asset request timed out' : 'Asset fetch failed');
     }
   }
 }
@@ -1421,7 +1461,17 @@ export async function handleMedia(req: Request, res: Response) {
   }
 
   const controller = new AbortController();
-  req.on('close', () => controller.abort());
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 8500);
+  res.on('close', () => {
+    clearTimeout(timeoutId);
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  });
 
   try {
     const headers: Record<string, string> = {
@@ -1448,6 +1498,7 @@ export async function handleMedia(req: Request, res: Response) {
       redirect: 'follow',
       signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     res.status(upstream.status);
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1473,16 +1524,15 @@ export async function handleMedia(req: Request, res: Response) {
       return res.end();
     }
 
-    const nodeStream = Readable.fromWeb(upstream.body as any);
-    nodeStream.on('error', () => {
-      if (!res.headersSent) res.status(502);
-      res.end();
-    });
-    return nodeStream.pipe(res);
+    return await pipeWebBodyToResponse(upstream, res);
   } catch (err: any) {
-    if (err?.name === 'AbortError') return;
+    clearTimeout(timeoutId);
+    if (err?.name === 'AbortError' && !timedOut) {
+      if (!res.writableEnded) res.end();
+      return;
+    }
     if (!res.headersSent) {
-      return res.status(502).send('Media stream failed');
+      return res.status(timedOut ? 504 : 502).send(timedOut ? 'Media request timed out' : 'Media stream failed');
     }
   }
 }
@@ -1620,7 +1670,7 @@ export async function handleProxy(req: Request, res: Response) {
       method: req.method === 'POST' ? 'POST' : 'GET',
       headers: fetchHeaders,
       redirect: 'follow',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(8000),
     };
 
     if (req.method === 'POST' && req.body && typeof req.body === 'object') {
@@ -1646,8 +1696,7 @@ export async function handleProxy(req: Request, res: Response) {
     if (contentType.includes('application/pdf') && response.body) {
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', 'inline');
-      const nodeStream = Readable.fromWeb(response.body as any);
-      return nodeStream.pipe(res);
+      return await pipeWebBodyToResponse(response, res);
     }
 
     if (contentType.includes('text/html') || contentType.includes('application/xhtml+xml')) {
@@ -1782,8 +1831,7 @@ export async function handleProxy(req: Request, res: Response) {
       res.setHeader('Content-Type', contentType);
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       if (response.body) {
-        const nodeStream = Readable.fromWeb(response.body as any);
-        return nodeStream.pipe(res);
+        return await pipeWebBodyToResponse(response, res);
       }
       const arrayBuffer = await response.arrayBuffer();
       return res.send(Buffer.from(arrayBuffer));
@@ -1868,14 +1916,25 @@ export function createVercelRouteApp(handler: (req: Request, res: Response) => P
   const app = express();
   app.set('trust proxy', true);
   app.use((req, res, next) => {
-    if (req.body !== undefined) return next();
+    if (req.method === 'GET' || req.method === 'HEAD' || req.body !== undefined || !req.readable) {
+      return next();
+    }
     express.json()(req, res, (err) => {
       if (err) return next(err);
+      if (req.body !== undefined || !req.readable) return next();
       express.urlencoded({ extended: true })(req, res, next);
     });
   });
   app.all('*', (req, res, next) => {
     Promise.resolve(handler(req, res)).catch(next);
+  });
+  app.use((err: any, _req: Request, res: Response, _next: any) => {
+    console.error('Unhandled route error:', err);
+    if (!res.headersSent) {
+      res.status(500).send(err?.message || 'Internal Server Error');
+    } else if (!res.writableEnded) {
+      res.end();
+    }
   });
   return app;
 }

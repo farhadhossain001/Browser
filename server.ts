@@ -8,7 +8,7 @@ import {
   handleAsset,
   handleMedia,
   handleProxy,
-} from './server/handlers';
+} from './api/_handlers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -1,3 +1,3 @@
-import { createVercelRouteApp, handleAsset } from '../server/handlers';
+import { createVercelRouteApp, handleAsset } from './_handlers.js';
 
 export default createVercelRouteApp(handleAsset);
